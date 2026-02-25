@@ -139,7 +139,7 @@ class DataHavenClient:
         latency_ms: float,
         privacy_level: str,
         cost_estimate: float,
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """
         Log inference metadata to DataHaven for compliance.
         
@@ -157,7 +157,7 @@ class DataHavenClient:
             cost_estimate: Estimated cost
             
         Returns:
-            True if logging succeeded, False otherwise
+            Dictionary with verification proof, or empty dict on failure
         """
         try:
             log_entry = {
@@ -176,17 +176,25 @@ class DataHavenClient:
             resp = self._client.post(f"{self._base_url}/log", json=log_entry)
             
             if resp.status_code == 200:
-                return True
+                data = resp.json()
+                if data.get("success"):
+                    return {
+                        "verified": True,
+                        "log_id": data.get("log_id", ""),
+                        "timestamp": data.get("timestamp", ""),
+                        "status": data.get("status", "stored"),
+                        **(data.get("verification", {})),
+                    }
             
             logger.warning("DataHaven log returned non-200: %s", resp.status_code)
-            return False
+            return {}
             
         except httpx.ConnectError:
             logger.debug("DataHaven service not reachable for logging")
-            return False
+            return {}
         except Exception as exc:
             logger.warning("DataHaven logging failed: %s", exc)
-            return False
+            return {}
     
     def close(self) -> None:
         """Close the HTTP client."""

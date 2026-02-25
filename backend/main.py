@@ -13,6 +13,7 @@ from backend.models.schemas import (
     LatencyStats,
     RedactionInfo,
     GuardrailInfo,
+    DataHavenVerification,
 )
 from backend.models.mcp_contracts import (
     MCPRequest,
@@ -419,8 +420,9 @@ def gateway(req: GatewayRequest, request: Request):
         logger.warning("Memory store failed: %s", exc)
 
     # Log to DataHaven (async, non-blocking metadata only)
+    dh_proof = None
     try:
-        datahaven_client.log_inference(
+        dh_result = datahaven_client.log_inference(
             request=mcp_req,
             response_route=actual_route,
             provider=provider_used,
@@ -430,6 +432,19 @@ def gateway(req: GatewayRequest, request: Request):
             privacy_level=privacy_level,
             cost_estimate=cost,
         )
+        if dh_result and dh_result.get("verified"):
+            dh_proof = DataHavenVerification(
+                verified=True,
+                log_id=dh_result.get("log_id", ""),
+                content_hash=dh_result.get("content_hash", ""),
+                merkle_leaf=dh_result.get("merkle_leaf", ""),
+                merkle_root=dh_result.get("merkle_root", ""),
+                signature=dh_result.get("signature", ""),
+                algorithm=dh_result.get("algorithm", "SHA-256"),
+                chain=dh_result.get("chain", "datahaven-v1"),
+                timestamp=dh_result.get("timestamp", ""),
+                status=dh_result.get("status", "stored"),
+            )
     except Exception as exc:
         logger.debug("DataHaven logging failed (non-critical): %s", exc)
 
@@ -459,6 +474,7 @@ def gateway(req: GatewayRequest, request: Request):
             output_filtered=output_filtered,
             output_reason=output_reason,
         ),
+        datahaven_proof=dh_proof,
     )
 
 

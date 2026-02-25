@@ -51,6 +51,20 @@ class RedactionInfo(BaseModel):
     types: Dict[str, int] = {}
 
 
+class DataHavenVerification(BaseModel):
+    """Cryptographic verification proof from DataHaven."""
+    verified: bool = False
+    log_id: str = ""
+    content_hash: str = ""
+    merkle_leaf: str = ""
+    merkle_root: str = ""
+    signature: str = ""
+    algorithm: str = ""
+    chain: str = ""
+    timestamp: str = ""
+    status: str = "pending"
+
+
 class GatewayResponse(BaseModel):
     request_id: str
     response: str
@@ -62,6 +76,7 @@ class GatewayResponse(BaseModel):
     redaction: RedactionInfo
     privacy_level: str = "BALANCED"
     guardrails: GuardrailInfo = GuardrailInfo()
+    datahaven_proof: Optional[DataHavenVerification] = None
 
 
 # ── Internal pipeline DTOs ──────────────────────────────────────────

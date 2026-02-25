@@ -10,6 +10,7 @@ import RedactionLog from "./components/RedactionLog";
 import RoutingInfo from "./components/RoutingInfo";
 import LatencyBreakdown from "./components/LatencyBreakdown";
 import GuardrailsPanel from "./components/GuardrailsPanel";
+import DataHavenProof from "./components/DataHavenProof";
 
 const EMPTY_RESULT = {
   response: "",
@@ -139,6 +140,8 @@ export default function App() {
             </div>
 
             <LatencyBreakdown latency={r.latency} />
+
+            <DataHavenProof proof={r.datahaven_proof} />
           </div>
         </div>
       </main>

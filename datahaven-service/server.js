@@ -16,6 +16,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
@@ -138,19 +139,69 @@ class DataHavenClient {
     // });
     // return response.json();
 
-    // Mock implementation - just validate and echo
     const logId = uuidv4();
+    const timestamp = new Date().toISOString();
+
+    // Build deterministic payload for hashing (sorted keys)
+    const hashPayload = JSON.stringify({
+      log_id: logId,
+      request_id: logEntry.request_id,
+      user_id: logEntry.user_id,
+      route: logEntry.route,
+      provider: logEntry.provider,
+      model: logEntry.model,
+      token_count: logEntry.token_count,
+      latency_ms: logEntry.latency_ms,
+      privacy_level: logEntry.privacy_level,
+      cost_estimate: logEntry.cost_estimate,
+      policy_mode: logEntry.policy_mode,
+      timestamp,
+    });
+
+    // SHA-256 content hash of the log entry
+    const content_hash = crypto
+      .createHash('sha256')
+      .update(hashPayload)
+      .digest('hex');
+
+    // Simulated Merkle leaf: hash of (log_id + content_hash)
+    const merkle_leaf = crypto
+      .createHash('sha256')
+      .update(logId + content_hash)
+      .digest('hex');
+
+    // Simulated Merkle root (in production, this is the tree root from DataHaven)
+    const merkle_root = crypto
+      .createHash('sha256')
+      .update(merkle_leaf + timestamp)
+      .digest('hex');
+
+    // HMAC signature using service key as proof of origin
+    const signature = crypto
+      .createHmac('sha256', this.apiKey)
+      .update(content_hash + merkle_root)
+      .digest('hex');
+
     console.log(`[DataHaven] Logged inference: ${logId}`, {
       request_id: logEntry.request_id,
       route: logEntry.route,
       provider: logEntry.provider,
-      token_count: logEntry.token_count
+      token_count: logEntry.token_count,
+      content_hash: content_hash.slice(0, 16) + '...',
     });
 
     return {
       log_id: logId,
       status: 'stored',
-      timestamp: new Date().toISOString()
+      timestamp,
+      verification: {
+        content_hash,
+        merkle_leaf,
+        merkle_root,
+        signature,
+        algorithm: 'SHA-256',
+        chain: 'datahaven-v1',
+      },
     };
   }
 }
