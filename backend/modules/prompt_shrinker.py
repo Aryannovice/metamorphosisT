@@ -62,9 +62,9 @@ class PromptShrinker:
             from llmlingua import PromptCompressor  # noqa: F401
 
             self._use_llmlingua = True
-            logger.info("LLMLingua-2 detected – using semantic compression")
+            logger.debug("LLMLingua-2 detected – using semantic compression")
         except ImportError:
-            logger.info("LLMLingua not installed – using lightweight compressor")
+            logger.debug("LLMLingua not installed – using lightweight compressor")
 
     def compress(
         self,

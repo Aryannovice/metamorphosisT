@@ -2,7 +2,7 @@ import time
 import uuid
 import logging
 
-from fastapi import FastAPI, Request, Response
+from fastapi import BackgroundTasks, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SEC
@@ -192,7 +192,7 @@ def _run_inference_with_failover(
 # ── Main pipeline ──────────────────────────────────────────────────
 
 @app.post("/gateway", response_model=GatewayResponse)
-def gateway(req: GatewayRequest, request: Request):
+def gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundTasks):
     request_id = str(uuid.uuid4())
     t_start = time.perf_counter()
     
@@ -408,18 +408,22 @@ def gateway(req: GatewayRequest, request: Request):
 
     total_ms = (time.perf_counter() - t_start) * 1000
 
-    # Store interaction in memory (use sanitized response if output was filtered)
+    # ── Background: memory store (non-blocking ChromaDB write) ───────
     content_to_store = final_response[:300] if output_filtered else raw_response[:300]
-    try:
-        memory.store(
-            f"Q: {masked_prompt}\nA: {content_to_store}",
-            request_id,
-            {"route": actual_route, "mode": req.mode.value},
-        )
-    except Exception as exc:
-        logger.warning("Memory store failed: %s", exc)
 
-    # Log to DataHaven (async, non-blocking metadata only)
+    def _store_memory():
+        try:
+            memory.store(
+                f"Q: {masked_prompt}\nA: {content_to_store}",
+                request_id,
+                {"route": actual_route, "mode": req.mode.value},
+            )
+        except Exception as exc:
+            logger.warning("Memory store failed: %s", exc)
+
+    background_tasks.add_task(_store_memory)
+
+    # ── DataHaven logging — synchronous so proof is included in response
     dh_proof = None
     try:
         dh_result = datahaven_client.log_inference(
@@ -481,7 +485,7 @@ def gateway(req: GatewayRequest, request: Request):
 # ── MCP API endpoint (for direct MCP clients) ──────────────────────
 
 @app.post("/mcp/gateway", response_model=MCPResponse)
-def mcp_gateway(req: GatewayRequest, request: Request):
+def mcp_gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundTasks):
     """
     MCP-compliant gateway endpoint.
     
@@ -597,30 +601,36 @@ def mcp_gateway(req: GatewayRequest, request: Request):
     
     total_ms = (time.perf_counter() - t_start) * 1000
     
-    # Store in memory
-    try:
-        memory.store(
-            f"Q: {masked_prompt}\nA: {final_response[:300]}",
-            request_id,
-            {"route": actual_route, "mode": req.mode.value},
-        )
-    except Exception:
-        pass
-    
-    # Log to DataHaven
-    try:
-        datahaven_client.log_inference(
-            request=mcp_req,
-            response_route=actual_route,
-            provider=provider_used,
-            model=decision["model"],
-            token_count=usage_tokens,
-            latency_ms=total_ms,
-            privacy_level=privacy_level,
-            cost_estimate=cost,
-        )
-    except Exception:
-        pass
+    # ── Background: memory store + DataHaven logging (non-blocking) ──
+    _mcp_response_snippet = final_response[:300]
+
+    def _mcp_store_memory():
+        try:
+            memory.store(
+                f"Q: {masked_prompt}\nA: {_mcp_response_snippet}",
+                request_id,
+                {"route": actual_route, "mode": req.mode.value},
+            )
+        except Exception:
+            pass
+
+    def _mcp_log_datahaven():
+        try:
+            datahaven_client.log_inference(
+                request=mcp_req,
+                response_route=actual_route,
+                provider=provider_used,
+                model=decision["model"],
+                token_count=usage_tokens,
+                latency_ms=total_ms,
+                privacy_level=privacy_level,
+                cost_estimate=cost,
+            )
+        except Exception:
+            pass
+
+    background_tasks.add_task(_mcp_store_memory)
+    background_tasks.add_task(_mcp_log_datahaven)
     
     return MCPResponse(
         request_id=request_id,

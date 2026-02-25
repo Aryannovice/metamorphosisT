@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 
 class MemoryLayer:
     def __init__(self):
-        self._client = chromadb.Client()
+        self._client = chromadb.EphemeralClient(
+            settings=chromadb.Settings(anonymized_telemetry=False)
+        )
         self._collection = self._client.get_or_create_collection(
             name="gateway_memory",
         )

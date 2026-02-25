@@ -26,7 +26,12 @@ _SPACY_LABEL_MAP = {
 class PIIGuard:
     def __init__(self):
         try:
-            self.nlp = spacy.load(SPACY_MODEL)
+            # Only keep the NER pipe — tagger/parser/lemmatizer etc. are unused
+            # and add significant per-call overhead.
+            self.nlp = spacy.load(
+                SPACY_MODEL,
+                exclude=["tagger", "parser", "senter", "attribute_ruler", "lemmatizer"],
+            )
         except OSError:
             logger.warning(
                 "spaCy model '%s' not found – falling back to regex-only PII detection. "

@@ -3,8 +3,9 @@ from typing import List, Tuple
 
 import requests
 import openai
+import google.generativeai as genai
 
-from backend.config import OPENAI_API_KEY, GROQ_API_KEY, OLLAMA_BASE_URL
+from backend.config import GEMINI_API_KEY, GROQ_API_KEY, OLLAMA_BASE_URL, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +14,10 @@ GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 class InferenceEngine:
     def __init__(self):
-        self._openai = (
-            openai.OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-        )
+        self._gemini_available = bool(GEMINI_API_KEY)
+        if GEMINI_API_KEY:
+            genai.configure(api_key=GEMINI_API_KEY)
+        self._gemini_model_name = GEMINI_MODEL
         self._groq = (
             openai.OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
             if GROQ_API_KEY
@@ -82,22 +84,53 @@ class InferenceEngine:
             logger.exception("Groq inference failed")
             return f"[Error] Groq inference failed: {exc}", 0
 
-    # ── OpenAI (cloud) ──────────────────────────────────────────────
+    # ── OpenAI (cloud – backed by Gemini) ─────────────────────────────
+
+    @staticmethod
+    def _convert_messages(messages: List[dict]):
+        system_parts: List[str] = []
+        contents: List[dict] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if role == "system":
+                system_parts.append(text)
+            else:
+                gemini_role = "model" if role == "assistant" else "user"
+                contents.append({"role": gemini_role, "parts": [text]})
+        system_instruction = "\n".join(system_parts) if system_parts else None
+        return system_instruction, contents
 
     def _call_openai(self, messages: List[dict], model: str) -> Tuple[str, int]:
-        if not self._openai:
+        if not self._gemini_available:
             return (
                 "[Error] No OPENAI_API_KEY configured. "
                 "Set it in your .env file to use OpenAI cloud routing.",
                 0,
             )
         try:
-            resp = self._openai.chat.completions.create(
-                model=model,
-                messages=messages,
+            system_instruction, contents = self._convert_messages(messages)
+            requested_model = (model or self._gemini_model_name or "").strip()
+            if not requested_model.lower().startswith(("gemini", "models/")):
+                requested_model = self._gemini_model_name
+            model_kwargs = {}
+            if system_instruction:
+                model_kwargs["system_instruction"] = system_instruction
+            gemini_model = genai.GenerativeModel(
+                requested_model,
+                **model_kwargs,
             )
-            content = resp.choices[0].message.content or ""
-            tokens = resp.usage.total_tokens if resp.usage else 0
+            resp = gemini_model.generate_content(contents)
+            content = resp.text or ""
+            tokens = 0
+            if resp.usage_metadata:
+                tokens = (
+                    getattr(resp.usage_metadata, "total_token_count", 0)
+                    or (
+                        getattr(resp.usage_metadata, "prompt_token_count", 0)
+                        + getattr(resp.usage_metadata, "candidates_token_count", 0)
+                    )
+                )
             return content, tokens
         except Exception as exc:
             logger.exception("OpenAI inference failed")

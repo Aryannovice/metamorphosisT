@@ -10,7 +10,8 @@ Only metadata flows through these endpoints.
 
 import logging
 import os
-from typing import Optional, Dict, Any
+import time
+from typing import Optional, Dict, Any, Tuple
 
 import httpx
 
@@ -19,7 +20,8 @@ from backend.models.mcp_contracts import MCPPolicy, MCPRequest
 logger = logging.getLogger(__name__)
 
 DATAHAVEN_SERVICE_URL = os.getenv("DATAHAVEN_SERVICE_URL", "http://localhost:3001")
-DATAHAVEN_TIMEOUT = float(os.getenv("DATAHAVEN_TIMEOUT", "5.0"))
+DATAHAVEN_TIMEOUT = float(os.getenv("DATAHAVEN_TIMEOUT", "2.0"))
+_POLICY_CACHE_TTL = float(os.getenv("POLICY_CACHE_TTL", "60.0"))
 
 
 class DataHavenError(Exception):
@@ -44,6 +46,8 @@ class DataHavenClient:
         self._timeout = timeout
         self._client = httpx.Client(timeout=timeout)
         self._available: Optional[bool] = None
+        # TTL cache: user_id -> (MCPPolicy, fetched_at_monotonic)
+        self._policy_cache: Dict[str, Tuple[MCPPolicy, float]] = {}
     
     def is_available(self) -> bool:
         """
@@ -65,16 +69,24 @@ class DataHavenClient:
     def fetch_policy(self, user_id: Optional[str] = None) -> MCPPolicy:
         """
         Fetch policy configuration for a user from DataHaven.
-        
+
+        Results are cached per user_id for POLICY_CACHE_TTL seconds to avoid
+        a blocking HTTP round-trip on every request.
+
         Args:
             user_id: User identifier. Defaults to 'default' if not provided.
-            
+
         Returns:
             MCPPolicy object with user's policy configuration.
             Falls back to default policy on failure.
         """
         user_id = user_id or "default"
-        
+
+        # Return cached policy if still fresh
+        cached = self._policy_cache.get(user_id)
+        if cached and (time.monotonic() - cached[1]) < _POLICY_CACHE_TTL:
+            return cached[0]
+
         try:
             resp = self._client.get(f"{self._base_url}/policy/{user_id}")
             
@@ -82,7 +94,7 @@ class DataHavenClient:
                 data = resp.json()
                 if data.get("success") and data.get("policy"):
                     policy_data = data["policy"]
-                    return MCPPolicy(
+                    policy = MCPPolicy(
                         mode=policy_data.get("mode", "BALANCED"),
                         allow_cloud=policy_data.get("allow_cloud", True),
                         max_tokens=policy_data.get("max_tokens", 4096),
@@ -92,12 +104,14 @@ class DataHavenClient:
                             "whitelisted_providers", ["local", "groq", "openai"]
                         ),
                     )
-            
+                    self._policy_cache[user_id] = (policy, time.monotonic())
+                    return policy
+
             logger.warning(
                 "DataHaven policy fetch returned non-200: %s", resp.status_code
             )
             return MCPPolicy.default()
-            
+
         except httpx.ConnectError:
             logger.warning("DataHaven service not reachable, using default policy")
             return MCPPolicy.default()

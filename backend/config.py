@@ -7,11 +7,15 @@ load_dotenv(Path(__file__).parent / ".env")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+# Gemini can be provided either via GEMINI_API_KEY or (for compatibility/branding)
+# via OPENAI_API_KEY without changing env var names.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or OPENAI_API_KEY
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LOCAL_MODEL = os.getenv("LOCAL_MODEL", "llama3.2")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 TOKEN_THRESHOLD = int(os.getenv("TOKEN_THRESHOLD", "500"))
 MEMORY_TOP_K = int(os.getenv("MEMORY_TOP_K", "3"))

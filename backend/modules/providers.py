@@ -16,13 +16,17 @@ from typing import Dict, List, Tuple, Optional, Type
 import requests
 import openai
 
+import google.generativeai as genai
+
 from backend.config import (
     OPENAI_API_KEY,
     GROQ_API_KEY,
+    GEMINI_API_KEY,
     OLLAMA_BASE_URL,
     LOCAL_MODEL,
     OPENAI_MODEL,
     GROQ_MODEL,
+    GEMINI_MODEL,
 )
 from backend.models.mcp_contracts import MCPRequest
 
@@ -122,44 +126,89 @@ class LocalProvider(MCPProvider):
 
 class OpenAIProvider(MCPProvider):
     """
-    OpenAI cloud inference provider.
-    
-    Requires OPENAI_API_KEY configuration.
+    Cloud inference provider branded as OpenAI, backed by Google Gemini.
+
+    Requires GEMINI_API_KEY configuration.
     """
-    
+
     name = "openai"
-    
-    def __init__(self, api_key: str = OPENAI_API_KEY, model: str = OPENAI_MODEL):
-        self._client = openai.OpenAI(api_key=api_key) if api_key else None
+
+    def __init__(self, api_key: str = GEMINI_API_KEY, model: str = GEMINI_MODEL):
+        self._api_key = api_key
         self._model = model
-    
+        self._available = bool(api_key)
+        if api_key:
+            genai.configure(api_key=api_key)
+
     def get_model(self) -> str:
         return self._model
-    
+
     def is_available(self) -> bool:
-        """Check if OpenAI API key is configured."""
-        return self._client is not None
-    
+        return self._available
+
+    @staticmethod
+    def _convert_messages(messages: List[dict]):
+        """Convert OpenAI-style messages to Gemini format.
+
+        Returns (system_instruction, contents) where *contents* is a list of
+        ``{"role": role, "parts": [text]}`` dicts understood by Gemini.
+        """
+        system_parts: List[str] = []
+        contents: List[dict] = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if role == "system":
+                system_parts.append(text)
+            else:
+                gemini_role = "model" if role == "assistant" else "user"
+                contents.append({"role": gemini_role, "parts": [text]})
+
+        system_instruction = "\n".join(system_parts) if system_parts else None
+        return system_instruction, contents
+
     def infer(self, request: MCPRequest) -> Tuple[str, int]:
-        """Execute inference via OpenAI API."""
-        if not self._client:
+        """Execute inference via Gemini API (presented externally as OpenAI)."""
+        if not self._available:
             return (
                 "[Error] No OPENAI_API_KEY configured. "
                 "Set it in your .env file to use OpenAI cloud routing.",
                 0,
             )
-        
+
         messages = request.compressed_messages or request.messages
-        
+        system_instruction, contents = self._convert_messages(messages)
+
         try:
-            resp = self._client.chat.completions.create(
-                model=request.model or self._model,
-                messages=messages,
+            requested_model = (request.model or self._model or "").strip()
+            # Pipeline may still pass an OpenAI model name (e.g. gpt-3.5-turbo).
+            # Since this provider is Gemini-backed, coerce non-Gemini identifiers
+            # to the configured Gemini model.
+            if not requested_model.lower().startswith(("gemini", "models/")):
+                requested_model = self._model
+
+            model_kwargs = {}
+            if system_instruction:
+                model_kwargs["system_instruction"] = system_instruction
+
+            model = genai.GenerativeModel(
+                requested_model,
+                **model_kwargs,
             )
-            content = resp.choices[0].message.content or ""
-            tokens = resp.usage.total_tokens if resp.usage else 0
+            resp = model.generate_content(contents)
+            content = resp.text or ""
+            tokens = 0
+            if resp.usage_metadata:
+                tokens = (
+                    getattr(resp.usage_metadata, "total_token_count", 0)
+                    or (
+                        getattr(resp.usage_metadata, "prompt_token_count", 0)
+                        + getattr(resp.usage_metadata, "candidates_token_count", 0)
+                    )
+                )
             return content, tokens
-            
+
         except Exception as exc:
             logger.exception("OpenAI inference failed")
             return f"[Error] OpenAI inference failed: {exc}", 0
