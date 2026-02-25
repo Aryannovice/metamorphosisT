@@ -24,7 +24,9 @@ class MCPPolicy(BaseModel):
     max_tokens: int = 4096
     require_pii_masking: bool = True
     compression_enabled: bool = True
-    whitelisted_providers: List[str] = Field(default_factory=lambda: ["local", "groq", "openai"])
+    whitelisted_providers: List[str] = Field(
+        default_factory=lambda: ["local", "groq", "openai", "mistral", "openrouter"]
+    )
     
     @classmethod
     def default(cls) -> "MCPPolicy":

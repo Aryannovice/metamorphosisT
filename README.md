@@ -29,9 +29,8 @@ venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 
-# Create .env from the example
-copy .env.example .env       # Windows
-# cp .env.example .env       # macOS/Linux
+# Configure environment variables
+# Edit `backend/.env` and add your API keys (GROQ / OPENAI / MISTRAL, etc.)
 
 # Start the API server
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000

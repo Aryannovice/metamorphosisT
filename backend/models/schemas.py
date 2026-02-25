@@ -12,6 +12,8 @@ class UserMode(str, Enum):
 class CloudProvider(str, Enum):
     GROQ = "GROQ"
     OPENAI = "OPENAI"
+    MISTRAL = "MISTRAL"
+    OPENROUTER = "OPENROUTER"
 
 
 # ── Request / Response ──────────────────────────────────────────────

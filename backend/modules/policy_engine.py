@@ -16,7 +16,14 @@ from typing import Optional, Tuple
 
 from backend.models.mcp_contracts import MCPRequest, MCPPolicy, PolicyMode
 from backend.modules.datahaven_sdk import get_datahaven_client
-from backend.config import TOKEN_THRESHOLD, LOCAL_MODEL, OPENAI_MODEL, GROQ_MODEL
+from backend.config import (
+    TOKEN_THRESHOLD,
+    LOCAL_MODEL,
+    OPENAI_MODEL,
+    GROQ_MODEL,
+    MISTRAL_MODEL,
+    OPENROUTER_MODEL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +41,8 @@ class PolicyEngine:
         self._cloud_models = {
             "OPENAI": OPENAI_MODEL,
             "GROQ": GROQ_MODEL,
+            "MISTRAL": MISTRAL_MODEL,
+            "OPENROUTER": OPENROUTER_MODEL,
         }
         self._token_threshold = TOKEN_THRESHOLD
     
@@ -109,7 +118,7 @@ class PolicyEngine:
         
         # Check if cloud is allowed by policy
         cloud_allowed = policy.allow_cloud and any(
-            policy.allows_provider(p) for p in ["groq", "openai"]
+            policy.allows_provider(p) for p in ["groq", "openai", "mistral", "openrouter"]
         )
         
         # BALANCED: Use token threshold
@@ -152,7 +161,7 @@ class PolicyEngine:
             return preferred_upper
         
         # Otherwise, find first available whitelisted cloud provider
-        for provider in ["GROQ", "OPENAI"]:
+        for provider in ["GROQ", "MISTRAL", "OPENROUTER", "OPENAI"]:
             if policy.allows_provider(provider):
                 return provider
         
@@ -183,7 +192,7 @@ class PolicyEngine:
             request.policy.mode != PolicyMode.STRICT and
             any(
                 request.policy.allows_provider(p)
-                for p in ["groq", "openai"]
+                for p in ["groq", "openai", "mistral", "openrouter"]
             )
         )
 

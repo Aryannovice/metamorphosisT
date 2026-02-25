@@ -75,6 +75,19 @@ rate_limiter = SlidingWindowRateLimiter(
 policy_engine = get_policy_engine()
 datahaven_client = get_datahaven_client()
 
+_GEMINI_ALIASED_PROVIDERS = {"MISTRAL", "OPENROUTER"}
+
+
+def _cloud_provider_for_inference(selected: str) -> str:
+    """
+    Map UI-selected providers to an actual inference provider.
+
+    In this repo, the "OPENAI" provider is Gemini-backed. To keep the frontend
+    options flexible even when other providers aren't configured, we allow
+    selecting MISTRAL / OPENROUTER but run them via the Gemini-backed provider.
+    """
+    return "OPENAI" if (selected or "").upper() in _GEMINI_ALIASED_PROVIDERS else selected
+
 
 def _client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
@@ -336,7 +349,8 @@ def gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundT
 
     # ─── [6] Routing Engine ─────────────────────────────────────
     t0 = time.perf_counter()
-    cloud_prov = req.cloud_provider.value
+    cloud_prov_selected = req.cloud_provider.value
+    cloud_prov = _cloud_provider_for_inference(cloud_prov_selected)
     # Use policy-aware routing
     decision = policy_engine.decide_route(mcp_req, tokens_after, cloud_prov)
     routing_ms = (time.perf_counter() - t0) * 1000
@@ -347,7 +361,7 @@ def gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundT
         mcp_req,
         duration_ms=routing_ms,
         route_decision=decision["route"],
-        provider=cloud_prov if decision["route"] == "CLOUD" else "local",
+        provider=cloud_prov_selected if decision["route"] == "CLOUD" else "local",
     )
 
     # ─── [7] Inference (with failover) ──────────────────────────
@@ -563,7 +577,8 @@ def mcp_gateway(req: GatewayRequest, request: Request, background_tasks: Backgro
     
     # [6] Routing Engine
     t0 = time.perf_counter()
-    cloud_prov = req.cloud_provider.value
+    cloud_prov_selected = req.cloud_provider.value
+    cloud_prov = _cloud_provider_for_inference(cloud_prov_selected)
     decision = policy_engine.decide_route(mcp_req, tokens_after, cloud_prov)
     routing_ms = (time.perf_counter() - t0) * 1000
     emit_event(Stages.ROUTING, mcp_req, duration_ms=routing_ms, route_decision=decision["route"])

@@ -31,6 +31,8 @@ const MODES = [
 const CLOUD_PROVIDERS = [
   { value: "GROQ", label: "Groq", desc: "Free, ultra-fast" },
   { value: "OPENAI", label: "OpenAI", desc: "GPT models" },
+  { value: "MISTRAL", label: "Mistral", desc: "Mistral LLM API" },
+  { value: "OPENROUTER", label: "OpenRouter", desc: "Router for many models" },
 ];
 
 export default function PromptInput({ onSubmit, isLoading }) {
@@ -88,7 +90,7 @@ export default function PromptInput({ onSubmit, isLoading }) {
               Cloud Provider
             </span>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
             {CLOUD_PROVIDERS.map((p) => {
               const selected = cloudProvider === p.value;
               return (

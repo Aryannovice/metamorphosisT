@@ -13,6 +13,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Optional, Type
 
+import json
 import requests
 import openai
 
@@ -22,11 +23,19 @@ from backend.config import (
     OPENAI_API_KEY,
     GROQ_API_KEY,
     GEMINI_API_KEY,
+    MISTRAL_API_KEY,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MODEL,
+    OPENROUTER_SITE_URL,
+    OPENROUTER_APP_NAME,
     OLLAMA_BASE_URL,
     LOCAL_MODEL,
     OPENAI_MODEL,
     GROQ_MODEL,
     GEMINI_MODEL,
+    MISTRAL_MODEL,
+    MISTRAL_BASE_URL,
 )
 from backend.models.mcp_contracts import MCPRequest
 
@@ -263,6 +272,193 @@ class GroqProvider(MCPProvider):
             return f"[Error] Groq inference failed: {exc}", 0
 
 
+class MistralProvider(MCPProvider):
+    """
+    Mistral cloud inference provider.
+
+    Uses Mistral's OpenAI-compatible chat completions API.
+    Requires MISTRAL_API_KEY configuration.
+    """
+
+    name = "mistral"
+
+    def __init__(
+        self,
+        api_key: str = MISTRAL_API_KEY,
+        model: str = MISTRAL_MODEL,
+        base_url: str = MISTRAL_BASE_URL,
+    ):
+        self._api_key = api_key
+        self._model = model
+        self._base_url = (base_url or "https://api.mistral.ai/v1").rstrip("/")
+
+    def get_model(self) -> str:
+        return self._model
+
+    def is_available(self) -> bool:
+        return bool(self._api_key)
+
+    @staticmethod
+    def _normalize_content(content) -> str:
+        """
+        Mistral may return `message.content` as a string *or* a structured
+        list of content blocks. Normalize it to plain text for the gateway UI.
+        """
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if item is None:
+                    continue
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                if isinstance(item, dict):
+                    if item.get("type") == "text" and item.get("text") is not None:
+                        parts.append(str(item.get("text")))
+                    elif item.get("text") is not None:
+                        parts.append(str(item.get("text")))
+                    elif item.get("content") is not None:
+                        parts.append(str(item.get("content")))
+                    else:
+                        parts.append(json.dumps(item, ensure_ascii=False))
+                    continue
+                parts.append(str(item))
+            return "".join(parts).strip()
+        if isinstance(content, dict):
+            if content.get("type") == "text" and content.get("text") is not None:
+                return str(content.get("text"))
+            if content.get("text") is not None:
+                return str(content.get("text"))
+            if content.get("content") is not None:
+                return str(content.get("content"))
+            return json.dumps(content, ensure_ascii=False)
+        return str(content)
+
+    def infer(self, request: MCPRequest) -> Tuple[str, int]:
+        if not self._api_key:
+            return (
+                "[Error] No MISTRAL_API_KEY configured. "
+                "Set it in your .env file to use Mistral cloud routing.",
+                0,
+            )
+
+        messages = request.compressed_messages or request.messages
+        model = (request.model or self._model or "").strip() or self._model
+
+        try:
+            resp = requests.post(
+                f"{self._base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                },
+                timeout=120,
+            )
+            if resp.status_code >= 400:
+                # Try to surface a useful error message
+                try:
+                    err = resp.json()
+                except Exception:
+                    err = {"error": {"message": resp.text}}
+                msg = (
+                    (err.get("error") or {}).get("message")
+                    or err.get("message")
+                    or f"HTTP {resp.status_code}"
+                )
+                return f"[Error] Mistral inference failed: {msg}", 0
+
+            data = resp.json()
+            message = ((data.get("choices") or [{}])[0].get("message") or {})
+            content = self._normalize_content(message.get("content"))
+
+            # If the model responded with tool calls and no user-facing content,
+            # expose the tool call payload as text so the UI doesn't show [object Object].
+            if not content and message.get("tool_calls") is not None:
+                content = json.dumps(message.get("tool_calls"), ensure_ascii=False)
+
+            usage = data.get("usage") or {}
+            tokens = usage.get("total_tokens") or (
+                (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0)
+            )
+            return content, int(tokens or 0)
+
+        except Exception as exc:
+            logger.exception("Mistral inference failed")
+            return f"[Error] Mistral inference failed: {exc}", 0
+
+
+class OpenRouterProvider(MCPProvider):
+    """
+    OpenRouter cloud inference provider.
+
+    OpenRouter is OpenAI-compatible; use it to access models (including Mistral)
+    via a single endpoint.
+    """
+
+    name = "openrouter"
+
+    def __init__(
+        self,
+        api_key: str = OPENROUTER_API_KEY,
+        base_url: str = OPENROUTER_BASE_URL,
+        default_model: str = OPENROUTER_MODEL,
+        site_url: str = OPENROUTER_SITE_URL,
+        app_name: str = OPENROUTER_APP_NAME,
+    ):
+        self._client = (
+            openai.OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                default_headers={
+                    # Optional attribution headers (safe to omit if empty)
+                    **({"HTTP-Referer": site_url} if site_url else {}),
+                    **({"X-Title": app_name} if app_name else {}),
+                },
+            )
+            if api_key
+            else None
+        )
+        self._default_model = default_model
+
+    def get_model(self) -> str:
+        return self._default_model
+
+    def is_available(self) -> bool:
+        return self._client is not None
+
+    def infer(self, request: MCPRequest) -> Tuple[str, int]:
+        if not self._client:
+            return (
+                "[Error] No OPENROUTER_API_KEY configured. "
+                "Set it in your .env file to use OpenRouter cloud routing.",
+                0,
+            )
+
+        messages = request.compressed_messages or request.messages
+        model = (request.model or self._default_model or "").strip() or self._default_model
+
+        try:
+            resp = self._client.chat.completions.create(
+                model=model,
+                messages=messages,
+            )
+            content = resp.choices[0].message.content or ""
+            tokens = resp.usage.total_tokens if resp.usage else 0
+            return content, tokens
+
+        except Exception as exc:
+            logger.exception("OpenRouter inference failed")
+            return f"[Error] OpenRouter inference failed: {exc}", 0
+
+
 class ProviderRegistry:
     """
     Registry for dynamic provider selection.
@@ -273,7 +469,7 @@ class ProviderRegistry:
     
     def __init__(self):
         self._providers: Dict[str, MCPProvider] = {}
-        self._fallback_order = ["local", "groq", "openai"]
+        self._fallback_order = ["local", "groq", "mistral", "openrouter", "openai"]
     
     def register(self, provider: MCPProvider) -> None:
         """Register a provider instance."""
@@ -346,6 +542,8 @@ def create_provider_registry() -> ProviderRegistry:
     registry.register(LocalProvider())
     registry.register(OpenAIProvider())
     registry.register(GroqProvider())
+    registry.register(MistralProvider())
+    registry.register(OpenRouterProvider())
     return registry
 
 

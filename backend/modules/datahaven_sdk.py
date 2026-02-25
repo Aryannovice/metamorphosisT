@@ -101,7 +101,8 @@ class DataHavenClient:
                         require_pii_masking=policy_data.get("require_pii_masking", True),
                         compression_enabled=policy_data.get("compression_enabled", True),
                         whitelisted_providers=policy_data.get(
-                            "whitelisted_providers", ["local", "groq", "openai"]
+                            "whitelisted_providers",
+                            ["local", "groq", "openai", "mistral", "openrouter"],
                         ),
                     )
                     self._policy_cache[user_id] = (policy, time.monotonic())

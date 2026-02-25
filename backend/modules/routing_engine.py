@@ -1,5 +1,12 @@
 import logging
-from backend.config import TOKEN_THRESHOLD, LOCAL_MODEL, OPENAI_MODEL, GROQ_MODEL
+from backend.config import (
+    TOKEN_THRESHOLD,
+    LOCAL_MODEL,
+    OPENAI_MODEL,
+    GROQ_MODEL,
+    MISTRAL_MODEL,
+    OPENROUTER_MODEL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +18,8 @@ class RoutingEngine:
         self.cloud_models = {
             "OPENAI": OPENAI_MODEL,
             "GROQ": GROQ_MODEL,
+            "MISTRAL": MISTRAL_MODEL,
+            "OPENROUTER": OPENROUTER_MODEL,
         }
 
     def decide(self, user_mode: str, token_count: int, cloud_provider: str = "GROQ") -> dict:
