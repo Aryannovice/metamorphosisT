@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+code, .mono {
+  font-family: "JetBrains Mono", monospace;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f1117;
+}
+::-webkit-scrollbar-thumb {
+  background: #3b3f4f;
+  border-radius: 3px;
+}
+
+@layer components {
+  .card {
+    @apply bg-surface-card rounded-xl border border-gray-800 p-5;
+  }
+  .badge {
+    @apply text-xs font-medium px-2.5 py-1 rounded-full;
+  }
+}
