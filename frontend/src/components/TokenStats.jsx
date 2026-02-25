@@ -13,7 +13,7 @@ export default function TokenStats({ stats }) {
   const data = [
     { name: "Original", value: stats.original, fill: "#6366f1" },
     { name: "Compressed", value: stats.compressed, fill: "#3b82f6" },
-    { name: "Saved", value: stats.saved, fill: "#22c55e" },
+    { name: "Saved", value: stats.saved, fill: "#10b981" },
   ];
 
   const pct = stats.compression_ratio
@@ -26,7 +26,7 @@ export default function TokenStats({ stats }) {
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
           Token Stats
         </h3>
-        <span className="badge bg-accent-green/10 text-accent-green">
+        <span className="badge bg-emerald-50 text-emerald-600 border border-emerald-200">
           {pct}% saved
         </span>
       </div>
@@ -42,8 +42,8 @@ export default function TokenStats({ stats }) {
           <YAxis hide />
           <Tooltip
             contentStyle={{
-              background: "#1a1d27",
-              border: "1px solid #374151",
+              background: "#ffffff",
+              border: "1px solid #e5e7eb",
               borderRadius: 8,
               fontSize: 12,
             }}

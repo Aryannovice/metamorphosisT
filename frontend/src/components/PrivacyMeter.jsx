@@ -5,40 +5,40 @@ const LEVELS = {
     icon: ShieldOff,
     label: "Blocked",
     desc: "Input rejected by guardrails",
-    color: "text-accent-red",
-    bg: "bg-accent-red/10",
-    ring: "ring-accent-red/30",
-    bar: "bg-accent-red",
+    color: "text-red-600",
+    bg: "bg-red-50",
+    ring: "ring-red-200",
+    bar: "bg-red-500",
     pct: 0,
   },
   HIGH: {
     icon: ShieldCheck,
     label: "High Privacy",
     desc: "All processing local",
-    color: "text-accent-green",
-    bg: "bg-accent-green/10",
-    ring: "ring-accent-green/30",
-    bar: "bg-accent-green",
+    color: "text-emerald-600",
+    bg: "bg-emerald-50",
+    ring: "ring-emerald-200",
+    bar: "bg-emerald-500",
     pct: 100,
   },
   BALANCED: {
     icon: ShieldAlert,
     label: "Balanced",
     desc: "PII masked before cloud",
-    color: "text-accent-blue",
-    bg: "bg-accent-blue/10",
-    ring: "ring-accent-blue/30",
-    bar: "bg-accent-blue",
+    color: "text-blue-600",
+    bg: "bg-blue-50",
+    ring: "ring-blue-200",
+    bar: "bg-blue-500",
     pct: 60,
   },
   CLOUD_HEAVY: {
     icon: ShieldOff,
     label: "Cloud Heavy",
     desc: "Sent to cloud API",
-    color: "text-accent-amber",
-    bg: "bg-accent-amber/10",
-    ring: "ring-accent-amber/30",
-    bar: "bg-accent-amber",
+    color: "text-amber-600",
+    bg: "bg-amber-50",
+    ring: "ring-amber-200",
+    bar: "bg-amber-500",
     pct: 25,
   },
 };
@@ -63,7 +63,7 @@ export default function PrivacyMeter({ level }) {
         </div>
       </div>
 
-      <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+      <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-700 ${cfg.bar}`}
           style={{ width: `${cfg.pct}%` }}

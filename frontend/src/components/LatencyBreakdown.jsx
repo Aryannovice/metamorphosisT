@@ -72,8 +72,8 @@ export default function LatencyBreakdown({ latency }) {
           <Tooltip
             formatter={(val) => [`${val.toFixed(1)} ms`]}
             contentStyle={{
-              background: "#1a1d27",
-              border: "1px solid #374151",
+              background: "#ffffff",
+              border: "1px solid #e5e7eb",
               borderRadius: 8,
               fontSize: 12,
             }}

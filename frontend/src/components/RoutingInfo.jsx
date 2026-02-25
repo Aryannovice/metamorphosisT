@@ -11,11 +11,11 @@ export default function RoutingInfo({ route, model }) {
           Routing Decision
         </h3>
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-lg bg-accent-red/10 ring-1 ring-accent-red/30">
-            <Ban size={22} className="text-accent-red" />
+          <div className="p-2.5 rounded-lg bg-red-50 ring-1 ring-red-200">
+            <Ban size={22} className="text-red-600" />
           </div>
           <div>
-            <p className="text-lg font-bold text-accent-red">Blocked</p>
+            <p className="text-lg font-bold text-red-600">Blocked</p>
             <p className="text-xs text-gray-500">Input rejected by guardrails</p>
           </div>
         </div>
@@ -33,20 +33,20 @@ export default function RoutingInfo({ route, model }) {
         <div
           className={`p-2.5 rounded-lg ring-1 ${
             isLocal
-              ? "bg-accent-cyan/10 ring-accent-cyan/30"
-              : "bg-accent-purple/10 ring-accent-purple/30"
+              ? "bg-cyan-50 ring-cyan-200"
+              : "bg-purple-50 ring-purple-200"
           }`}
         >
           {isLocal ? (
-            <Cpu size={22} className="text-accent-cyan" />
+            <Cpu size={22} className="text-cyan-600" />
           ) : (
-            <Cloud size={22} className="text-accent-purple" />
+            <Cloud size={22} className="text-purple-600" />
           )}
         </div>
         <div>
           <p
             className={`text-lg font-bold ${
-              isLocal ? "text-accent-cyan" : "text-accent-purple"
+              isLocal ? "text-cyan-600" : "text-purple-600"
             }`}
           >
             {isLocal ? "Local Inference" : "Cloud Inference"}

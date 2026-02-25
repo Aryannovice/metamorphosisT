@@ -13,20 +13,20 @@ export default function CostTracker({ cost, route }) {
         <div
           className={`p-2.5 rounded-lg ring-1 ${
             isFree
-              ? "bg-accent-green/10 ring-accent-green/30"
-              : "bg-accent-amber/10 ring-accent-amber/30"
+              ? "bg-emerald-50 ring-emerald-200"
+              : "bg-amber-50 ring-amber-200"
           }`}
         >
           {isFree ? (
-            <TrendingDown size={22} className="text-accent-green" />
+            <TrendingDown size={22} className="text-emerald-600" />
           ) : (
-            <DollarSign size={22} className="text-accent-amber" />
+            <DollarSign size={22} className="text-amber-600" />
           )}
         </div>
         <div>
           <p
             className={`text-2xl mono font-bold ${
-              isFree ? "text-accent-green" : "text-accent-amber"
+              isFree ? "text-emerald-600" : "text-amber-600"
             }`}
           >
             {isFree ? "FREE" : `$${cost.toFixed(6)}`}

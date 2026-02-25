@@ -5,14 +5,14 @@ export default {
     extend: {
       colors: {
         surface: {
-          DEFAULT: "#0f1117",
-          card: "#1a1d27",
-          hover: "#242836",
+          DEFAULT: "#ffffff",
+          card: "#f8fafc",
+          hover: "#f1f5f9",
         },
         accent: {
-          green: "#22c55e",
+          green: "#10b981",
           blue: "#3b82f6",
-          purple: "#a855f7",
+          purple: "#8b5cf6",
           amber: "#f59e0b",
           red: "#ef4444",
           cyan: "#06b6d4",
