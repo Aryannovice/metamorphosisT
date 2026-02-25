@@ -14,6 +14,15 @@ from backend.models.schemas import (
     RedactionInfo,
     GuardrailInfo,
 )
+from backend.models.mcp_contracts import (
+    MCPRequest,
+    MCPResponse,
+    MCPPolicy,
+    MCPTokenStats,
+    MCPLatencyStats,
+    MCPRedactionInfo,
+    MCPGuardrailResult,
+)
 from backend.modules.pii_guard import PIIGuard
 from backend.modules.memory_layer import MemoryLayer
 from backend.modules.prompt_builder import PromptBuilder
@@ -24,6 +33,10 @@ from backend.modules.post_processor import estimate_cost, determine_privacy_leve
 from backend.modules.input_guardrails import InputGuardrails
 from backend.modules.output_guardrails import OutputGuardrails
 from backend.modules.rate_limiter import SlidingWindowRateLimiter
+from backend.modules.providers import provider_registry
+from backend.modules.policy_engine import get_policy_engine
+from backend.modules.datahaven_sdk import get_datahaven_client
+from backend.modules.event_logger import emit_event, emit_error, emit_fallback, Stages
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,6 +68,11 @@ rate_limiter = SlidingWindowRateLimiter(
     max_requests=RATE_LIMIT_REQUESTS,
     window_seconds=RATE_LIMIT_WINDOW_SEC,
 )
+
+# ── MCP Components ────────────────────────────────────────────────
+
+policy_engine = get_policy_engine()
+datahaven_client = get_datahaven_client()
 
 
 def _client_ip(request: Request) -> str:
@@ -89,7 +107,85 @@ async def rate_limit_middleware(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "memory_entries": memory.count()}
+    return {
+        "status": "ok",
+        "memory_entries": memory.count(),
+        "datahaven_available": datahaven_client.is_available(),
+        "providers_available": provider_registry.list_available(),
+    }
+
+
+# ── MCP-compliant pipeline ─────────────────────────────────────────
+
+def _create_mcp_request(
+    req: GatewayRequest,
+    request_id: str,
+    user_id: str = None,
+) -> MCPRequest:
+    """Initialize an MCP-compliant request object."""
+    return MCPRequest(
+        request_id=request_id,
+        user_id=user_id,
+        prompt=req.prompt,
+        cloud_provider=req.cloud_provider.value,
+        metadata={
+            "client_mode": req.mode.value,
+            "client_cloud_provider": req.cloud_provider.value,
+        },
+    )
+
+
+def _run_inference_with_failover(
+    mcp_req: MCPRequest,
+    decision: dict,
+    cloud_prov: str,
+) -> tuple:
+    """
+    Run inference with graceful failover support.
+    
+    Failsafe behavior:
+    - Local failure → fallback to cloud if allowed by policy
+    - Cloud failure → return controlled error
+    """
+    route = decision["route"]
+    model = decision["model"]
+    
+    # Get provider from registry
+    provider = provider_registry.get_for_route(route, cloud_prov)
+    
+    if provider is None:
+        return f"[Error] No provider available for route {route}", 0, route, ""
+    
+    # Set model on request for provider
+    mcp_req.model = model
+    
+    # Try primary provider
+    t0 = time.perf_counter()
+    response, tokens = provider.infer(mcp_req)
+    inference_ms = (time.perf_counter() - t0) * 1000
+    
+    # Check for failure and attempt fallback
+    if response.startswith("[Error]") and route == "LOCAL":
+        if policy_engine.can_fallback_to_cloud(mcp_req):
+            emit_fallback(
+                Stages.INFERENCE,
+                mcp_req,
+                from_provider="local",
+                to_provider=cloud_prov.lower(),
+                reason="Local inference failed",
+            )
+            # Try cloud fallback
+            fallback_provider = provider_registry.get(cloud_prov.lower())
+            if fallback_provider and fallback_provider.is_available():
+                mcp_req.model = policy_engine._cloud_models.get(
+                    cloud_prov.upper(), model
+                )
+                t0 = time.perf_counter()
+                response, tokens = fallback_provider.infer(mcp_req)
+                inference_ms += (time.perf_counter() - t0) * 1000
+                return response, tokens, "CLOUD", fallback_provider.name
+    
+    return response, tokens, route, provider.name
 
 
 # ── Main pipeline ──────────────────────────────────────────────────
@@ -98,6 +194,25 @@ def health():
 def gateway(req: GatewayRequest, request: Request):
     request_id = str(uuid.uuid4())
     t_start = time.perf_counter()
+    
+    # Initialize MCP request for audit trail
+    user_id = request.headers.get("X-User-ID")
+    mcp_req = _create_mcp_request(req, request_id, user_id)
+    
+    # ─── [0] Policy Fetch (DataHaven) ───────────────────────────
+    t0 = time.perf_counter()
+    try:
+        mcp_req.policy = policy_engine.fetch_policy(user_id)
+    except Exception as exc:
+        logger.warning("Policy fetch failed, using default: %s", exc)
+        mcp_req.policy = MCPPolicy.default()
+    policy_fetch_ms = (time.perf_counter() - t0) * 1000
+    emit_event(
+        Stages.POLICY_FETCH,
+        mcp_req,
+        duration_ms=policy_fetch_ms,
+        policy_mode=mcp_req.policy.mode.value,
+    )
 
     # ─── [1] Input Guardrails ───────────────────────────────────
     t0 = time.perf_counter()
@@ -105,9 +220,16 @@ def gateway(req: GatewayRequest, request: Request):
         req.prompt
     )
     input_guardrails_ms = (time.perf_counter() - t0) * 1000
+    emit_event(
+        Stages.INPUT_GUARDRAILS,
+        mcp_req,
+        duration_ms=input_guardrails_ms,
+        passed=input_ok,
+    )
 
     if not input_ok:
         total_ms = (time.perf_counter() - t_start) * 1000
+        emit_error(Stages.INPUT_GUARDRAILS, mcp_req, input_block_reason)
         return GatewayResponse(
             request_id=request_id,
             response=input_block_reason,
@@ -131,23 +253,76 @@ def gateway(req: GatewayRequest, request: Request):
     t0 = time.perf_counter()
     masked_prompt, pii_info = pii_guard.mask(req.prompt, request_id)
     pii_ms = (time.perf_counter() - t0) * 1000
+    mcp_req.masked_prompt = masked_prompt
+    mcp_req.pii_map = pii_info.get("redaction_map", {})
+    emit_event(
+        Stages.PII_GUARD,
+        mcp_req,
+        duration_ms=pii_ms,
+        redaction_count=pii_info["redaction_count"],
+    )
 
     # ─── [3] Memory Layer ───────────────────────────────────────
     t0 = time.perf_counter()
-    context_snippets = memory.retrieve(masked_prompt)
+    try:
+        context_snippets = memory.retrieve(masked_prompt)
+    except Exception as exc:
+        # Failsafe: Memory failure → continue without context
+        logger.warning("Memory retrieval failed, continuing: %s", exc)
+        context_snippets = []
     memory_ms = (time.perf_counter() - t0) * 1000
+    mcp_req.context_snippets = context_snippets or []
+    emit_event(
+        Stages.MEMORY_RETRIEVAL,
+        mcp_req,
+        duration_ms=memory_ms,
+        context_count=len(context_snippets or []),
+    )
 
     # ─── [4] Prompt Builder ─────────────────────────────────────
+    t0 = time.perf_counter()
     messages, tokens_before = prompt_builder.build(
         masked_prompt, context_snippets or None
+    )
+    prompt_build_ms = (time.perf_counter() - t0) * 1000
+    mcp_req.messages = messages
+    mcp_req.token_stats.original = tokens_before
+    emit_event(
+        Stages.PROMPT_BUILD,
+        mcp_req,
+        duration_ms=prompt_build_ms,
+        token_count=tokens_before,
     )
 
     # ─── [5] Prompt Shrinker ────────────────────────────────────
     t0 = time.perf_counter()
-    compressed_msgs, tokens_after, tokens_saved = shrinker.compress(
-        messages, tokens_before
-    )
+    # Check policy for compression
+    if policy_engine.should_compress(mcp_req.policy):
+        try:
+            compressed_msgs, tokens_after, tokens_saved = shrinker.compress(
+                messages, tokens_before
+            )
+        except Exception as exc:
+            # Failsafe: Compression failure → use original
+            logger.warning("Compression failed, using original: %s", exc)
+            compressed_msgs, tokens_after, tokens_saved = messages, tokens_before, 0
+    else:
+        compressed_msgs, tokens_after, tokens_saved = messages, tokens_before, 0
     compression_ms = (time.perf_counter() - t0) * 1000
+    
+    mcp_req.compressed_messages = compressed_msgs
+    mcp_req.token_stats.after_compression = tokens_after
+    mcp_req.token_stats.saved = tokens_saved
+    mcp_req.token_stats.compression_ratio = round(
+        tokens_saved / tokens_before if tokens_before else 0, 3
+    )
+    emit_event(
+        Stages.PROMPT_COMPRESS,
+        mcp_req,
+        duration_ms=compression_ms,
+        token_count=tokens_after,
+        tokens_saved=tokens_saved,
+    )
 
     token_stats = TokenStats(
         original=tokens_before,
@@ -159,15 +334,36 @@ def gateway(req: GatewayRequest, request: Request):
     )
 
     # ─── [6] Routing Engine ─────────────────────────────────────
-    cloud_prov = req.cloud_provider.value
-    decision = router_engine.decide(req.mode.value, tokens_after, cloud_prov)
-
-    # ─── [7] Inference ──────────────────────────────────────────
     t0 = time.perf_counter()
-    raw_response, usage_tokens = inference.run(
-        compressed_msgs, decision["route"], decision["model"], cloud_prov
+    cloud_prov = req.cloud_provider.value
+    # Use policy-aware routing
+    decision = policy_engine.decide_route(mcp_req, tokens_after, cloud_prov)
+    routing_ms = (time.perf_counter() - t0) * 1000
+    mcp_req.route = decision["route"]
+    mcp_req.model = decision["model"]
+    emit_event(
+        Stages.ROUTING,
+        mcp_req,
+        duration_ms=routing_ms,
+        route_decision=decision["route"],
+        provider=cloud_prov if decision["route"] == "CLOUD" else "local",
+    )
+
+    # ─── [7] Inference (with failover) ──────────────────────────
+    t0 = time.perf_counter()
+    raw_response, usage_tokens, actual_route, provider_used = (
+        _run_inference_with_failover(mcp_req, decision, cloud_prov)
     )
     inference_ms = (time.perf_counter() - t0) * 1000
+    mcp_req.token_stats.inference_used = usage_tokens
+    emit_event(
+        Stages.INFERENCE,
+        mcp_req,
+        duration_ms=inference_ms,
+        route_decision=actual_route,
+        provider=provider_used,
+        token_count=usage_tokens,
+    )
 
     # ─── [8] Output Guardrails ────────────────────────────────────
     t0 = time.perf_counter()
@@ -175,6 +371,12 @@ def gateway(req: GatewayRequest, request: Request):
         output_guardrails.check(raw_response)
     )
     output_guardrails_ms = (time.perf_counter() - t0) * 1000
+    emit_event(
+        Stages.OUTPUT_GUARDRAILS,
+        mcp_req,
+        duration_ms=output_guardrails_ms,
+        passed=output_ok,
+    )
 
     if not output_ok:
         final_response = final_response_candidate
@@ -186,28 +388,55 @@ def gateway(req: GatewayRequest, request: Request):
         output_reason = ""
 
     # ─── [9] Post-processing ──────────────────────────────────
+    t0 = time.perf_counter()
     final_response = pii_guard.unmask(final_response, request_id)
     pii_guard.clear(request_id)
 
-    cost = estimate_cost(token_stats, usage_tokens, decision["route"])
+    cost = estimate_cost(token_stats, usage_tokens, actual_route)
     privacy_level = determine_privacy_level(
-        decision["route"], pii_info["redaction_count"]
+        actual_route, pii_info["redaction_count"]
+    )
+    post_process_ms = (time.perf_counter() - t0) * 1000
+    emit_event(
+        Stages.POST_PROCESS,
+        mcp_req,
+        duration_ms=post_process_ms,
+        cost_estimate=cost,
+        privacy_level=privacy_level,
     )
 
     total_ms = (time.perf_counter() - t_start) * 1000
 
     # Store interaction in memory (use sanitized response if output was filtered)
     content_to_store = final_response[:300] if output_filtered else raw_response[:300]
-    memory.store(
-        f"Q: {masked_prompt}\nA: {content_to_store}",
-        request_id,
-        {"route": decision["route"], "mode": req.mode.value},
-    )
+    try:
+        memory.store(
+            f"Q: {masked_prompt}\nA: {content_to_store}",
+            request_id,
+            {"route": actual_route, "mode": req.mode.value},
+        )
+    except Exception as exc:
+        logger.warning("Memory store failed: %s", exc)
+
+    # Log to DataHaven (async, non-blocking metadata only)
+    try:
+        datahaven_client.log_inference(
+            request=mcp_req,
+            response_route=actual_route,
+            provider=provider_used,
+            model=decision["model"],
+            token_count=usage_tokens,
+            latency_ms=total_ms,
+            privacy_level=privacy_level,
+            cost_estimate=cost,
+        )
+    except Exception as exc:
+        logger.debug("DataHaven logging failed (non-critical): %s", exc)
 
     return GatewayResponse(
         request_id=request_id,
         response=final_response,
-        route=decision["route"],
+        route=actual_route,
         model_used=decision["model"],
         token_stats=token_stats,
         latency=LatencyStats(
@@ -230,4 +459,190 @@ def gateway(req: GatewayRequest, request: Request):
             output_filtered=output_filtered,
             output_reason=output_reason,
         ),
+    )
+
+
+# ── MCP API endpoint (for direct MCP clients) ──────────────────────
+
+@app.post("/mcp/gateway", response_model=MCPResponse)
+def mcp_gateway(req: GatewayRequest, request: Request):
+    """
+    MCP-compliant gateway endpoint.
+    
+    Returns full MCPResponse with audit trail for enterprise clients.
+    """
+    request_id = str(uuid.uuid4())
+    t_start = time.perf_counter()
+    
+    user_id = request.headers.get("X-User-ID")
+    mcp_req = _create_mcp_request(req, request_id, user_id)
+    
+    # [0] Policy Fetch
+    t0 = time.perf_counter()
+    try:
+        mcp_req.policy = policy_engine.fetch_policy(user_id)
+    except Exception:
+        mcp_req.policy = MCPPolicy.default()
+    policy_fetch_ms = (time.perf_counter() - t0) * 1000
+    emit_event(Stages.POLICY_FETCH, mcp_req, duration_ms=policy_fetch_ms)
+    
+    # [1] Input Guardrails
+    t0 = time.perf_counter()
+    input_ok, input_block_reason, _ = input_guardrails.check(req.prompt)
+    input_guardrails_ms = (time.perf_counter() - t0) * 1000
+    emit_event(Stages.INPUT_GUARDRAILS, mcp_req, duration_ms=input_guardrails_ms)
+    
+    if not input_ok:
+        total_ms = (time.perf_counter() - t_start) * 1000
+        return MCPResponse.blocked(
+            request_id=request_id,
+            reason=input_block_reason,
+            latency_stats=MCPLatencyStats(
+                policy_fetch_ms=policy_fetch_ms,
+                input_guardrails_ms=input_guardrails_ms,
+                total_ms=total_ms,
+            ),
+            audit_trail=mcp_req.audit_trail,
+        )
+    
+    # [2] PII Guard
+    t0 = time.perf_counter()
+    masked_prompt, pii_info = pii_guard.mask(req.prompt, request_id)
+    pii_ms = (time.perf_counter() - t0) * 1000
+    mcp_req.masked_prompt = masked_prompt
+    emit_event(Stages.PII_GUARD, mcp_req, duration_ms=pii_ms)
+    
+    # [3] Memory Layer
+    t0 = time.perf_counter()
+    try:
+        context_snippets = memory.retrieve(masked_prompt)
+    except Exception:
+        context_snippets = []
+    memory_ms = (time.perf_counter() - t0) * 1000
+    emit_event(Stages.MEMORY_RETRIEVAL, mcp_req, duration_ms=memory_ms)
+    
+    # [4] Prompt Builder
+    t0 = time.perf_counter()
+    messages, tokens_before = prompt_builder.build(masked_prompt, context_snippets or None)
+    prompt_build_ms = (time.perf_counter() - t0) * 1000
+    mcp_req.messages = messages
+    emit_event(Stages.PROMPT_BUILD, mcp_req, duration_ms=prompt_build_ms)
+    
+    # [5] Prompt Shrinker
+    t0 = time.perf_counter()
+    if policy_engine.should_compress(mcp_req.policy):
+        try:
+            compressed_msgs, tokens_after, tokens_saved = shrinker.compress(messages, tokens_before)
+        except Exception:
+            compressed_msgs, tokens_after, tokens_saved = messages, tokens_before, 0
+    else:
+        compressed_msgs, tokens_after, tokens_saved = messages, tokens_before, 0
+    compression_ms = (time.perf_counter() - t0) * 1000
+    mcp_req.compressed_messages = compressed_msgs
+    emit_event(Stages.PROMPT_COMPRESS, mcp_req, duration_ms=compression_ms)
+    
+    # [6] Routing Engine
+    t0 = time.perf_counter()
+    cloud_prov = req.cloud_provider.value
+    decision = policy_engine.decide_route(mcp_req, tokens_after, cloud_prov)
+    routing_ms = (time.perf_counter() - t0) * 1000
+    emit_event(Stages.ROUTING, mcp_req, duration_ms=routing_ms, route_decision=decision["route"])
+    
+    # [7] Inference
+    t0 = time.perf_counter()
+    raw_response, usage_tokens, actual_route, provider_used = _run_inference_with_failover(
+        mcp_req, decision, cloud_prov
+    )
+    inference_ms = (time.perf_counter() - t0) * 1000
+    emit_event(Stages.INFERENCE, mcp_req, duration_ms=inference_ms, provider=provider_used)
+    
+    # [8] Output Guardrails
+    t0 = time.perf_counter()
+    output_ok, final_response_candidate, _ = output_guardrails.check(raw_response)
+    output_guardrails_ms = (time.perf_counter() - t0) * 1000
+    emit_event(Stages.OUTPUT_GUARDRAILS, mcp_req, duration_ms=output_guardrails_ms)
+    
+    final_response = final_response_candidate
+    output_filtered = not output_ok
+    
+    # [9] Post-processing
+    t0 = time.perf_counter()
+    final_response = pii_guard.unmask(final_response, request_id)
+    pii_guard.clear(request_id)
+    
+    cost = estimate_cost(
+        TokenStats(original=tokens_before, compressed=tokens_after, saved=tokens_saved),
+        usage_tokens,
+        actual_route,
+    )
+    privacy_level = determine_privacy_level(actual_route, pii_info["redaction_count"])
+    post_process_ms = (time.perf_counter() - t0) * 1000
+    emit_event(Stages.POST_PROCESS, mcp_req, duration_ms=post_process_ms)
+    
+    total_ms = (time.perf_counter() - t_start) * 1000
+    
+    # Store in memory
+    try:
+        memory.store(
+            f"Q: {masked_prompt}\nA: {final_response[:300]}",
+            request_id,
+            {"route": actual_route, "mode": req.mode.value},
+        )
+    except Exception:
+        pass
+    
+    # Log to DataHaven
+    try:
+        datahaven_client.log_inference(
+            request=mcp_req,
+            response_route=actual_route,
+            provider=provider_used,
+            model=decision["model"],
+            token_count=usage_tokens,
+            latency_ms=total_ms,
+            privacy_level=privacy_level,
+            cost_estimate=cost,
+        )
+    except Exception:
+        pass
+    
+    return MCPResponse(
+        request_id=request_id,
+        response=final_response,
+        route=actual_route,
+        provider=provider_used,
+        model_used=decision["model"],
+        token_stats=MCPTokenStats(
+            original=tokens_before,
+            after_compression=tokens_after,
+            inference_used=usage_tokens,
+            saved=tokens_saved,
+            compression_ratio=round(tokens_saved / tokens_before if tokens_before else 0, 3),
+        ),
+        latency_stats=MCPLatencyStats(
+            policy_fetch_ms=policy_fetch_ms,
+            input_guardrails_ms=input_guardrails_ms,
+            pii_ms=pii_ms,
+            memory_ms=memory_ms,
+            prompt_build_ms=prompt_build_ms,
+            compression_ms=compression_ms,
+            routing_ms=routing_ms,
+            inference_ms=inference_ms,
+            output_guardrails_ms=output_guardrails_ms,
+            post_process_ms=post_process_ms,
+            total_ms=total_ms,
+        ),
+        privacy_level=privacy_level,
+        cost_estimate=cost,
+        redaction=MCPRedactionInfo(
+            count=pii_info["redaction_count"],
+            types=pii_info["redaction_types"],
+        ),
+        guardrails=MCPGuardrailResult(
+            input_blocked=False,
+            output_filtered=output_filtered,
+            output_reason=final_response_candidate if output_filtered else "",
+        ),
+        audit_trail=mcp_req.audit_trail,
+        policy_applied=mcp_req.policy,
     )

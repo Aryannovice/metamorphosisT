@@ -45,6 +45,7 @@ yarn-error.log*
 # Build output
 frontend/dist/
 frontend/.cache/
+datahaven-service/node_modules/
 
 # Environment variables
 .env
