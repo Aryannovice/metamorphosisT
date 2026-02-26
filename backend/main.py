@@ -166,7 +166,7 @@ def _run_inference_with_failover(
     model = decision["model"]
     
     # Check if LOCAL route is requested but Ollama is not available
-    if route == "LOCAL" and not inference_engine.is_ollama_available():
+    if route == "LOCAL" and not inference.is_ollama_available():
         logger.warning(
             "LOCAL route requested but Ollama unavailable. "
             "Falling back to cloud provider: %s", cloud_prov
