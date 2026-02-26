@@ -137,10 +137,12 @@ export async function uploadAuditProof(bucketId, proofData) {
   const fileSizeBigInt = BigInt(fileManager.getFileSize());
 
   // Get MSP details
-  const { mspId, multiaddresses } = await getMspInfo();
+  const mspInfo = await getMspInfo();
+  const mspId = mspInfo?.mspId;
+  const multiaddresses = mspInfo?.multiaddresses;
 
-  if (!multiaddresses?.length) {
-    throw new Error('MSP multiaddresses are missing');
+  if (!multiaddresses || !Array.isArray(multiaddresses) || multiaddresses.length === 0) {
+    throw new Error('MSP multiaddresses are missing - ensure MSP is properly connected');
   }
 
   // Extract peer IDs from multiaddresses
@@ -250,9 +252,14 @@ export async function waitForMSPConfirmOnChain(fileKey) {
 
 // Get buckets from MSP
 export async function getBucketsFromMSP() {
-  const mspClient = getMspClient();
-  const buckets = await mspClient.buckets.listBuckets();
-  return buckets;
+  try {
+    const mspClient = getMspClient();
+    const buckets = await mspClient.buckets.listBuckets();
+    return Array.isArray(buckets) ? buckets : [];
+  } catch (err) {
+    console.warn('Failed to get buckets from MSP:', err);
+    return [];
+  }
 }
 
 // Get a single bucket info

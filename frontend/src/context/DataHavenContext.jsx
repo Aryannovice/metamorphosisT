@@ -198,7 +198,8 @@ export function DataHavenProvider({ children }) {
       
       // Try to find existing bucket
       const buckets = await getBucketsFromMSP();
-      const existingBucket = buckets.find(b => b.name === AUDIT_BUCKET_NAME);
+      const bucketsArray = Array.isArray(buckets) ? buckets : [];
+      const existingBucket = bucketsArray.find(b => b && b.name === AUDIT_BUCKET_NAME);
       
       if (existingBucket) {
         setActiveBucketId(existingBucket.id);
