@@ -1,0 +1,8 @@
+fastapi
+pydantic
+python-dotenv
+openai
+google-generativeai
+tiktoken
+requests
+httpx

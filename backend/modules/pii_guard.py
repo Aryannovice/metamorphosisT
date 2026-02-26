@@ -2,7 +2,13 @@ import re
 import logging
 from typing import Dict, Tuple
 
-import spacy
+# Optional spacy import
+try:
+    import spacy
+    SPACY_AVAILABLE = True
+except ImportError:
+    spacy = None
+    SPACY_AVAILABLE = False
 
 from backend.config import SPACY_MODEL
 
@@ -25,21 +31,25 @@ _SPACY_LABEL_MAP = {
 
 class PIIGuard:
     def __init__(self):
-        try:
-            # Only keep the NER pipe — tagger/parser/lemmatizer etc. are unused
-            # and add significant per-call overhead.
-            self.nlp = spacy.load(
-                SPACY_MODEL,
-                exclude=["tagger", "parser", "senter", "attribute_ruler", "lemmatizer"],
-            )
-        except OSError:
-            logger.warning(
-                "spaCy model '%s' not found – falling back to regex-only PII detection. "
-                "Run:  python -m spacy download %s",
-                SPACY_MODEL,
-                SPACY_MODEL,
-            )
-            self.nlp = None
+        self.nlp = None
+        if SPACY_AVAILABLE:
+            try:
+                # Only keep the NER pipe — tagger/parser/lemmatizer etc. are unused
+                # and add significant per-call overhead.
+                self.nlp = spacy.load(
+                    SPACY_MODEL,
+                    exclude=["tagger", "parser", "senter", "attribute_ruler", "lemmatizer"],
+                )
+            except OSError:
+                logger.warning(
+                    "spaCy model '%s' not found – falling back to regex-only PII detection. "
+                    "Run:  python -m spacy download %s",
+                    SPACY_MODEL,
+                    SPACY_MODEL,
+                )
+                self.nlp = None
+        else:
+            logger.warning("spaCy not installed – using regex-only PII detection")
         self._redaction_store: Dict[str, Dict[str, str]] = {}
 
     def mask(self, text: str, request_id: str) -> Tuple[str, Dict]:

@@ -1,0 +1,37 @@
+# Ignore heavy unnecessary files
+backend/domain_specifc_prompt_inject_fastapi.py
+backend/domain_specific_prompt_injection_model.py
+backend/detect-personally-identifiable-information-pii.ipynb
+backend/detect-personally-identifiable-information-pii.py
+backend/piiii_masker.py
+backend/__pycache__/
+backend/modules/__pycache__/
+backend/models/__pycache__/
+backend/monitoring/
+
+# Test and dev files
+*.ipynb
+*.pyc
+__pycache__/
+
+# Audio files
+audio_alerts/
+
+# Environment files
+backend/.env.example
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Node modules (built separately)
+node_modules/
+
+# Python virtual env
+venv/
+.venv/
