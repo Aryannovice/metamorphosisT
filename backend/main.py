@@ -158,11 +158,41 @@ def _run_inference_with_failover(
     Run inference with graceful failover support.
     
     Failsafe behavior:
+    - Ollama unavailable → automatically fallback to cloud
     - Local failure → fallback to cloud if allowed by policy
     - Cloud failure → return controlled error
     """
     route = decision["route"]
     model = decision["model"]
+    
+    # Check if LOCAL route is requested but Ollama is not available
+    if route == "LOCAL" and not inference_engine.is_ollama_available():
+        logger.warning(
+            "LOCAL route requested but Ollama unavailable. "
+            "Falling back to cloud provider: %s", cloud_prov
+        )
+        emit_fallback(
+            Stages.INFERENCE,
+            mcp_req,
+            from_provider="local",
+            to_provider=cloud_prov.lower(),
+            reason="Ollama not available (production environment or not running)",
+        )
+        # Force cloud route
+        route = "CLOUD"
+        fallback_provider = provider_registry.get(cloud_prov.lower())
+        if fallback_provider and fallback_provider.is_available():
+            model = policy_engine._cloud_models.get(cloud_prov.upper(), model)
+            mcp_req.model = model
+            t0 = time.perf_counter()
+            response, tokens = fallback_provider.infer(mcp_req)
+            return response, tokens, "CLOUD", fallback_provider.name
+        else:
+            return (
+                "[Error] No cloud provider available and Ollama is not running. "
+                "Please configure API keys for cloud providers (GROQ, OpenAI, etc.)",
+                0, "CLOUD", ""
+            )
     
     # Get provider from registry
     provider = provider_registry.get_for_route(route, cloud_prov)
@@ -178,7 +208,7 @@ def _run_inference_with_failover(
     response, tokens = provider.infer(mcp_req)
     inference_ms = (time.perf_counter() - t0) * 1000
     
-    # Check for failure and attempt fallback
+    # Check for failure and attempt fallback (for other local errors)
     if response.startswith("[Error]") and route == "LOCAL":
         if policy_engine.can_fallback_to_cloud(mcp_req):
             emit_fallback(

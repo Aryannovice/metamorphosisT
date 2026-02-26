@@ -294,15 +294,22 @@ export default function DataHavenStoragePanel({ promptHash, responseHash, gatewa
           </div>
 
           {/* Explorer Link */}
-          <a
-            href={latestProof.explorerUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center gap-2 w-full py-2.5 px-4 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
-          >
-            <ExternalLink className="w-4 h-4" />
-            View on DataHaven Explorer
-          </a>
+          {latestProof.explorerUrl ? (
+            <a
+              href={latestProof.explorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 w-full py-2.5 px-4 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
+            >
+              <ExternalLink className="w-4 h-4" />
+              View on DataHaven Explorer
+            </a>
+          ) : (
+            <div className="flex items-center justify-center gap-2 w-full py-2.5 px-4 bg-gray-50 text-gray-500 border border-gray-200 rounded-lg text-sm font-medium">
+              <AlertCircle className="w-4 h-4" />
+              Explorer URL not available
+            </div>
+          )}
 
           {/* Upload Another */}
           <button

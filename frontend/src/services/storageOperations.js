@@ -359,7 +359,7 @@ export async function uploadAuditProof(bucketId, proofData) {
   }
   console.log('✅ File uploaded to MSP successfully');
 
-  return {
+  const result = {
     fileKey: fileKey.toHex(),
     fileName,
     txHash,
@@ -368,6 +368,11 @@ export async function uploadAuditProof(bucketId, proofData) {
     explorerUrl: `${NETWORKS.testnet.explorerUrl}/tx/${txHash}`,
     proofPayload,
   };
+  
+  console.log('📦 Upload complete! Result:', result);
+  console.log('🔗 Explorer URL:', result.explorerUrl);
+
+  return result;
 }
 
 /**

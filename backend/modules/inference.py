@@ -24,6 +24,19 @@ class InferenceEngine:
             else None
         )
         self._ollama_url = OLLAMA_BASE_URL
+        self._ollama_available = self._check_ollama_available()
+    
+    def _check_ollama_available(self) -> bool:
+        """Check if Ollama is reachable."""
+        try:
+            resp = requests.get(f"{self._ollama_url}/api/version", timeout=2)
+            return resp.status_code == 200
+        except:
+            return False
+    
+    def is_ollama_available(self) -> bool:
+        """Public method to check Ollama availability."""
+        return self._ollama_available
 
     def run(
         self,
