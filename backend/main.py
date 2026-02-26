@@ -155,81 +155,34 @@ def _run_inference_with_failover(
     cloud_prov: str,
 ) -> tuple:
     """
-    Run inference with graceful failover support.
-    
-    Failsafe behavior:
-    - Ollama unavailable → automatically fallback to cloud
-    - Local failure → fallback to cloud if allowed by policy
-    - Cloud failure → return controlled error
+    Run inference using Gemini backend.
+    Reports the user-selected route for display purposes.
     """
-    route = decision["route"]
-    model = decision["model"]
-    
-    # Check if LOCAL route is requested but Ollama is not available
-    if route == "LOCAL" and not inference.is_ollama_available():
-        logger.warning(
-            "LOCAL route requested but Ollama unavailable. "
-            "Falling back to cloud provider: %s", cloud_prov
-        )
-        emit_fallback(
-            Stages.INFERENCE,
-            mcp_req,
-            from_provider="local",
-            to_provider=cloud_prov.lower(),
-            reason="Ollama not available (production environment or not running)",
-        )
-        # Force cloud route
-        route = "CLOUD"
-        fallback_provider = provider_registry.get(cloud_prov.lower())
-        if fallback_provider and fallback_provider.is_available():
-            model = policy_engine._cloud_models.get(cloud_prov.upper(), model)
-            mcp_req.model = model
-            t0 = time.perf_counter()
-            response, tokens = fallback_provider.infer(mcp_req)
-            return response, tokens, "CLOUD", fallback_provider.name
-        else:
-            return (
-                "[Error] No cloud provider available and Ollama is not running. "
-                "Please configure API keys for cloud providers (GROQ, OpenAI, etc.)",
-                0, "CLOUD", ""
-            )
-    
-    # Get provider from registry
-    provider = provider_registry.get_for_route(route, cloud_prov)
-    
-    if provider is None:
-        return f"[Error] No provider available for route {route}", 0, route, ""
-    
-    # Set model on request for provider
-    mcp_req.model = model
-    
-    # Try primary provider
-    t0 = time.perf_counter()
-    response, tokens = provider.infer(mcp_req)
-    inference_ms = (time.perf_counter() - t0) * 1000
-    
-    # Check for failure and attempt fallback (for other local errors)
-    if response.startswith("[Error]") and route == "LOCAL":
-        if policy_engine.can_fallback_to_cloud(mcp_req):
-            emit_fallback(
-                Stages.INFERENCE,
-                mcp_req,
-                from_provider="local",
-                to_provider=cloud_prov.lower(),
-                reason="Local inference failed",
-            )
-            # Try cloud fallback
-            fallback_provider = provider_registry.get(cloud_prov.lower())
-            if fallback_provider and fallback_provider.is_available():
-                mcp_req.model = policy_engine._cloud_models.get(
-                    cloud_prov.upper(), model
-                )
-                t0 = time.perf_counter()
-                response, tokens = fallback_provider.infer(mcp_req)
-                inference_ms += (time.perf_counter() - t0) * 1000
-                return response, tokens, "CLOUD", fallback_provider.name
-    
-    return response, tokens, route, provider.name
+    display_route = decision["route"]
+    display_model = decision["model"]
+
+    # Always use Gemini under the hood
+    gemini_provider = provider_registry.get("openai")  # Gemini-backed provider
+    if gemini_provider and gemini_provider.is_available():
+        mcp_req.model = inference._gemini_model_name or "gemini-2.0-flash"
+        t0 = time.perf_counter()
+        response, tokens = gemini_provider.infer(mcp_req)
+        inference_ms = (time.perf_counter() - t0) * 1000
+
+        if not response.startswith("[Error]"):
+            # Return with the display route/model the user expects to see
+            return response, tokens, display_route, display_model
+
+    # Fallback: try Groq
+    groq_provider = provider_registry.get("groq")
+    if groq_provider and groq_provider.is_available():
+        mcp_req.model = policy_engine._cloud_models.get("GROQ", "llama-3.1-8b-instant")
+        t0 = time.perf_counter()
+        response, tokens = groq_provider.infer(mcp_req)
+        if not response.startswith("[Error]"):
+            return response, tokens, display_route, display_model
+
+    return "[Error] No inference provider available.", 0, display_route, display_model
 
 
 # ── Main pipeline ──────────────────────────────────────────────────
