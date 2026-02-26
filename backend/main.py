@@ -155,30 +155,27 @@ def _run_inference_with_failover(
     cloud_prov: str,
 ) -> tuple:
     """
-    Run inference using Gemini backend.
+    Run inference using Groq backend.
     Reports the user-selected route for display purposes.
     """
     display_route = decision["route"]
     display_model = decision["model"]
 
-    # Always use Gemini under the hood
-    gemini_provider = provider_registry.get("openai")  # Gemini-backed provider
-    if gemini_provider and gemini_provider.is_available():
-        mcp_req.model = inference._gemini_model_name or "gemini-2.0-flash"
-        t0 = time.perf_counter()
-        response, tokens = gemini_provider.infer(mcp_req)
-        inference_ms = (time.perf_counter() - t0) * 1000
-
-        if not response.startswith("[Error]"):
-            # Return with the display route/model the user expects to see
-            return response, tokens, display_route, display_model
-
-    # Fallback: try Groq
+    # Always use Groq under the hood (fast, reliable, free tier)
     groq_provider = provider_registry.get("groq")
     if groq_provider and groq_provider.is_available():
         mcp_req.model = policy_engine._cloud_models.get("GROQ", "llama-3.1-8b-instant")
         t0 = time.perf_counter()
         response, tokens = groq_provider.infer(mcp_req)
+        if not response.startswith("[Error]"):
+            return response, tokens, display_route, display_model
+
+    # Fallback: try Gemini
+    gemini_provider = provider_registry.get("openai")
+    if gemini_provider and gemini_provider.is_available():
+        mcp_req.model = inference._gemini_model_name or "gemini-2.0-flash"
+        t0 = time.perf_counter()
+        response, tokens = gemini_provider.infer(mcp_req)
         if not response.startswith("[Error]"):
             return response, tokens, display_route, display_model
 
