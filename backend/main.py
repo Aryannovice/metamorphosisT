@@ -153,8 +153,15 @@ def _create_mcp_request(
 
 from openai import OpenAI as _OpenAI
 
-_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
-_groq_client = _OpenAI(api_key=_GROQ_KEY, base_url="https://api.groq.com/openai/v1")
+_groq_client = None
+
+
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        key = os.getenv("GROQ_API_KEY", "").strip()
+        _groq_client = _OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
+    return _groq_client
 
 
 def _run_inference_with_failover(
@@ -181,7 +188,8 @@ def _run_inference_with_failover(
             else:
                 oai_messages.append({"role": "user", "content": text})
 
-        resp = _groq_client.chat.completions.create(
+        client = _get_groq_client()
+        resp = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=oai_messages,
             max_tokens=2048,
