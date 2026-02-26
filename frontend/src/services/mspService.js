@@ -73,9 +73,33 @@ export async function getMspHealth() {
 
 // Get MSP information
 export async function getMspInfo() {
-  const client = getMspClient();
-  const info = await client.info.getInfo();
-  return info;
+  try {
+    const client = getMspClient();
+    const info = await client.info.getInfo();
+    
+    console.log('MSP Info received:', info);
+    
+    // Ensure we have the required structure
+    if (!info) {
+      throw new Error('MSP info is undefined');
+    }
+    
+    // The API might return 'id' instead of 'mspId', normalize it
+    if (!info.mspId && info.id) {
+      info.mspId = info.id;
+    }
+    
+    // Check if multiaddresses exists
+    if (!info.multiaddresses || !Array.isArray(info.multiaddresses)) {
+      console.error('Invalid multiaddresses in MSP info:', info);
+      throw new Error('MSP multiaddresses not available. MSP might not be fully initialized.');
+    }
+    
+    return info;
+  } catch (error) {
+    console.error('Failed to get MSP info:', error);
+    throw new Error(`MSP info retrieval failed: ${error.message}`);
+  }
 }
 
 // Authenticate user via SIWE (Sign-In With Ethereum)

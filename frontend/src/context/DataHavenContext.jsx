@@ -191,22 +191,31 @@ export function DataHavenProvider({ children }) {
     setError(null);
     
     try {
+      // Verify MSP is connected and authenticated
+      if (!mspConnected || !authenticated) {
+        throw new Error('Please connect your wallet and authenticate with DataHaven first');
+      }
+      
       // Check if we already have an active bucket
       if (activeBucketId) {
         return activeBucketId;
       }
       
       // Try to find existing bucket
+      console.log('Fetching buckets from MSP...');
       const buckets = await getBucketsFromMSP();
+      console.log('Buckets received:', buckets);
       const bucketsArray = Array.isArray(buckets) ? buckets : [];
       const existingBucket = bucketsArray.find(b => b && b.name === AUDIT_BUCKET_NAME);
       
       if (existingBucket) {
-        setActiveBucketId(existingBucket.id);
-        return existingBucket.id;
+        console.log('Found existing bucket:', existingBucket);
+        setActiveBucketId(existingBucket.bucketId);
+        return existingBucket.bucketId;
       }
       
       // Create new bucket
+      console.log('Creating new bucket:', AUDIT_BUCKET_NAME);
       const result = await createBucket(AUDIT_BUCKET_NAME, false);
       
       if (!result.alreadyExists) {
@@ -217,10 +226,11 @@ export function DataHavenProvider({ children }) {
       setActiveBucketId(result.bucketId);
       return result.bucketId;
     } catch (err) {
+      console.error('Ensure bucket error:', err);
       setError(err.message);
       throw err;
     }
-  }, [activeBucketId]);
+  }, [activeBucketId, mspConnected, authenticated]);
 
   // Upload audit proof
   const handleUploadProof = useCallback(async (proofData) => {
