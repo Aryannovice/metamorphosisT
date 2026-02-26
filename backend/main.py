@@ -149,37 +149,50 @@ def _create_mcp_request(
     )
 
 
+# ── Direct Groq inference (bypasses provider registry) ────────────
+
+from openai import OpenAI as _OpenAI
+
+_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
+_groq_client = _OpenAI(api_key=_GROQ_KEY, base_url="https://api.groq.com/openai/v1")
+
+
 def _run_inference_with_failover(
     mcp_req: MCPRequest,
     decision: dict,
     cloud_prov: str,
 ) -> tuple:
     """
-    Run inference using Groq backend.
-    Reports the user-selected route for display purposes.
+    Run inference directly via Groq.
+    Reports the user-selected route/model for display.
     """
     display_route = decision["route"]
     display_model = decision["model"]
 
-    # Always use Groq under the hood (fast, reliable, free tier)
-    groq_provider = provider_registry.get("groq")
-    if groq_provider and groq_provider.is_available():
-        mcp_req.model = policy_engine._cloud_models.get("GROQ", "llama-3.1-8b-instant")
-        t0 = time.perf_counter()
-        response, tokens = groq_provider.infer(mcp_req)
-        if not response.startswith("[Error]"):
-            return response, tokens, display_route, display_model
+    messages = mcp_req.compressed_messages or mcp_req.messages
 
-    # Fallback: try Gemini
-    gemini_provider = provider_registry.get("openai")
-    if gemini_provider and gemini_provider.is_available():
-        mcp_req.model = inference._gemini_model_name or "gemini-2.0-flash"
-        t0 = time.perf_counter()
-        response, tokens = gemini_provider.infer(mcp_req)
-        if not response.startswith("[Error]"):
-            return response, tokens, display_route, display_model
+    try:
+        oai_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if role in ("system", "assistant", "user"):
+                oai_messages.append({"role": role, "content": text})
+            else:
+                oai_messages.append({"role": "user", "content": text})
 
-    return "[Error] No inference provider available.", 0, display_route, display_model
+        resp = _groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=oai_messages,
+            max_tokens=2048,
+        )
+        content = resp.choices[0].message.content or ""
+        tokens = resp.usage.total_tokens if resp.usage else 0
+        return content, tokens, display_route, display_model
+
+    except Exception as exc:
+        logger.exception("Groq inference failed: %s", exc)
+        return f"[Error] Inference failed: {exc}", 0, display_route, display_model
 
 
 # ── Main pipeline ──────────────────────────────────────────────────
