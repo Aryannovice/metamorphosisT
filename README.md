@@ -107,3 +107,6 @@ ollama pull llama3.2
 - **Frontend:** React 18, Vite, Tailwind CSS, Recharts, Lucide Icons
 - **Local LLM:** Ollama
 - **Cloud LLM:** OpenAI API
+
+
+just click on - https://metamorphosis-cyan.vercel.app/ 
